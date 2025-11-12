@@ -1,0 +1,72 @@
+Name: Kali_Linux_RDP_Tailscale
+on:
+  workflow_dispatch:
+jobs:
+  kali-rdp:
+    runs-on: ubuntu-latest # <--- التغيير إلى بيئة Linux
+    timeout-minutes: 360 # 6 ساعات كحد أقصى (مجاني)
+    steps:
+      
+      # 1. تحديث النظام وتثبيت بيئة سطح المكتب XFCE
+      - name: Install Desktop Environment (XFCE) and RDP Server
+        run: |
+          sudo apt update
+          # تثبيت أدوات سطح المكتب الأساسية و xrdp (بروتوكول RDP للخوادم)
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y xfce4 xfce4-goodies xrdp
+          
+      # 2. تكوين مستخدم RDP (الاسم وكلمة المرور)
+      - name: Create RDP User
+        run: |
+          USER="KALI_USER"
+          PASS="Kali@123" # كلمة المرور: Kali@123
+          
+          # إنشاء مستخدم وإضافته إلى مجموعة sudo
+          sudo useradd -m -s /bin/bash $USER
+          echo "$USER:$PASS" | sudo chpasswd
+          sudo usermod -aG sudo $USER
+          
+          # تكوين ملف تشغيل سطح المكتب لـ RDP
+          echo xfce4-session > /home/$USER/.xsession
+          sudo chown $USER:$USER /home/$USER/.xsession
+          
+          # إعادة تشغيل خدمة RDP لتعمل على المنفذ الافتراضي 3389
+          sudo systemctl enable xrdp
+          sudo systemctl restart xrdp
+          
+          echo "RDP_CREDS=User: $USER | Password: $PASS" >> $env:GITHUB_ENV
+          
+      # 3. تثبيت Tailscale
+      - name: Install Tailscale
+        run: |
+          # إضافة مفتاح Tailscale الرسمي إلى النظام
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          sudo apt update
+          sudo apt install -y tailscale
+
+      # 4. تأسيس اتصال Tailscale
+      - name: Establish Tailscale Connection
+        run: |
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=kali-runner-$GITHUB_RUN_ID
+          # انتظار الحصول على IP
+          TS_IP=$(sudo tailscale ip -4)
+          while [ -z "$TS_IP" ]; do
+              echo "Waiting for Tailscale IP..."
+              sleep 5
+              TS_IP=$(sudo tailscale ip -4)
+          done
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+
+      # 5. الحفاظ على الاتصال
+      - name: Maintain Connection
+        run: |
+          echo "Tailscale IP: $TAILSCALE_IP"
+          echo "Username: KALI_USER"
+          echo "Password: Kali@123"
+          echo "Connect via RDP Client to: $TAILSCALE_IP"
+          
+          # حلقة لا نهائية لإبقاء الوظيفة نشطة
+          while true; do
+              echo "[$(date)] Kali RDP Active. Use Ctrl+C in workflow to terminate."
+              sleep 300
+          done
